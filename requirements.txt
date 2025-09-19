@@ -1,0 +1,14 @@
+numpy
+imageio
+matplotlib
+torch
+tqdm
+SimpleITK
+edt
+cupy
+cupyx
+skimage
+vtk
+pandas
+scipy
+lungmask
