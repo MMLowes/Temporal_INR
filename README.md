@@ -1,4 +1,4 @@
-# Temporal_INR
+# Temporal INR
 Code for our papers "Temporal Periodic Image Registration with Implicit Neural Representations" and "Temporal Super-Resolution of Medical Images with Implicit Neural Representations" from the MLMI workshop at MICCAI 2025.
 
 We utilize implicit neural representations to perform registration over periodic image data, here the lung CT from the [DIRLAB dataset](https://med.emory.edu/departments/radiation-oncology/research-laboratories/deformable-image-registration/index.html) and an in house heart CT dataset.
