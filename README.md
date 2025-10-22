@@ -1,7 +1,7 @@
-# Temporal_INR
+# Temporal INR
 Code for our papers "Temporal Periodic Image Registration with Implicit Neural Representations" and "Temporal Super-Resolution of Medical Images with Implicit Neural Representations" from the MLMI workshop at MICCAI 2025.
 
-We utilize implicit neural representations to perform registration over periodic image data, here the lung CT from the [DIRLAB dataset](https://med.emory.edu/departments/radiation-oncology/research-laboratories/deformable-image-registration/index.html) and an in house heart CT dataset.
+We utilize implicit neural representations to perform registration over periodic image data, here the lung CT from the [DIRLAB dataset](https://med.emory.edu/departments/radiation-oncology/research-laboratories/deformable-image-registration/index.html) and an in-house-heart CT dataset.
 
 The network it self is trained for image registration over a periodic image sequence, but can also be used for creation of new images in the sequence.
 
@@ -23,7 +23,7 @@ To do temporal super-resolution it requires the trained registration model, then
 python interpolation.py --path path/to/dirlab --save_folder ./results --temporal_resolutions 50 200
 ```
 
-Results of reconstruciton matrics can be replicated by running 
+Results of reconstruciton metrics can be replicated by running 
 ```
 python reconstruction.py --path path/to/dirlab --save_folder ./results
 ```
