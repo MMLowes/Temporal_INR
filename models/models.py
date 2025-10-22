@@ -399,7 +399,7 @@ class TemporalImplicitRegistrator:
             
         return transformed_images #.numpy()
     
-    def temporal_resulution_transform(self, image_stack, temporal_res, method="direct", interpolation="trilinear", dims=None, save_slices_only=False, use_gt_images=True):
+    def temporal_resulution_transform(self, image_stack, temporal_res, method="direct", interpolation="trilinear", dims=None, save_slices_only=False, use_gt_images=False):
         
         # remove sdf channel if present
         image_stack = image_stack[..., 0] if image_stack.ndim == 5  else image_stack
@@ -500,12 +500,12 @@ class TemporalImplicitRegistrator:
                     general.save_torch_volume_as_sitk(transformed_median, os.path.join(self.opts.save_folder, "reconstructions", f"{save_prefix}_median.nii.gz"), reference, convert_to_HU=not calculate_dice)
             
             if calculate_dice:
-                metrics[f"d_{r_idx}"] = {"segmentation": general.dice_score(gt_stack[r_idx], transformed_back_forward.round())[0],
+                metrics[f"d_{r_idx}"] = {"back_forward": general.dice_score(gt_stack[r_idx], transformed_back_forward.round())[0],
                                         #  "mean": general.dice_score(gt_stack[r_idx], transformed_mean.round())[0],
                                         #  "median": general.dice_score(gt_stack[r_idx], transformed_median.round())[0]
                                          }
             else:
-                metrics[f"f_{r_idx}"] = {"recon": general.compute_reconstruction_metrics(gt_stack[r_idx], transformed_back_forward, reference=reference),
+                metrics[f"f_{r_idx}"] = {"back_forward": general.compute_reconstruction_metrics(gt_stack[r_idx], transformed_back_forward, reference=reference),
                                     # "mean": general.compute_reconstruction_metrics(gt_stack[r_idx], transformed_mean, reference=reference),
                                     # "median": general.compute_reconstruction_metrics(gt_stack[r_idx], transformed_median, reference=reference)
                                     }
@@ -527,6 +527,10 @@ class TemporalImplicitRegistrator:
             if isinstance(time_coordinates_end, int):
                 end_time = torch.tensor([time_coordinates_end]*points.shape[0], device="cuda")
             time_coordinates_end = self.encoded_time_steps[end_time]
+        if len(time_coordinates_start.shape) == 1:
+            time_coordinates_start = time_coordinates_start.unsqueeze(0).repeat(points.shape[0], 1).cuda()
+        if len(time_coordinates_end.shape) == 1:
+            time_coordinates_end = time_coordinates_end.unsqueeze(0).repeat(points.shape[0], 1).cuda()
         input_coordinates = torch.cat([coordinate_tensor, time_coordinates_start, time_coordinates_end], dim=-1)
         
         coordinate_chunks = torch.split(input_coordinates, self.opts.batch_size)
@@ -549,7 +553,7 @@ class TemporalImplicitRegistrator:
         else:
             return coord_temp.cpu().detach().numpy()
     
-    def transform_points_over_cycle(self, points, start_time=0, method="direct", reference=None, order=1):
+    def transform_points_over_cycle(self, points, start_time=0, method="direct", reference=None, order=1, n_steps=None):
         """
         Transforms the given points over a cycle of time.
         Args:
@@ -564,21 +568,20 @@ class TemporalImplicitRegistrator:
         if reference is not None:
             points = general.scale_points_from_reference_to_1_1(points, reference)
         
+        n_steps = self.opts.cycle_length if n_steps is None else n_steps
         
         if isinstance(start_time, int):
             start_time = torch.tensor([start_time]*points.shape[0], device="cuda")
         start_encoded = self.encoded_time_steps[start_time]
         
-        transformed_points = np.zeros((self.opts.cycle_length+1, *points.shape))
+        transformed_points = np.zeros((n_steps+1, *points.shape))
         transformed_points[0] = points
         jacobians = []
-        
-        for i in range(1, self.opts.cycle_length+1):
-            start_time_stepped = self.step_cycle(start_time, step=i-1) 
-            end_time_stepped = self.step_cycle(start_time, step=i)
+
+        for i in range(1, n_steps+1):
+            start_stepped_encoded = general.encode_time(i-1, n_steps)
+            end_stepped_encoded = general.encode_time(i, n_steps)
             
-            start_stepped_encoded = self.encoded_time_steps[start_time_stepped]
-            end_stepped_encoded = self.encoded_time_steps[end_time_stepped]
             
             if method == "direct":
                 tmp_points = self.transform_points(points, start_encoded, end_stepped_encoded)
@@ -592,7 +595,7 @@ class TemporalImplicitRegistrator:
                 tmp_points_seq = self.transform_points(transformed_points[i-1], start_stepped_encoded, end_stepped_encoded)
                 tmp_points = (tmp_points_direct + tmp_points_seq) / 2
             elif method == "jacobian":
-                tmp_points, jacobian = self.transform_points_jacobian(points, start_time, end_time_stepped)
+                tmp_points, jacobian = self.transform_points_jacobian(points, start_encoded, end_stepped_encoded, is_encoded=True)
                 jacobians.append(jacobian)
 
             transformed_points[i] = tmp_points
@@ -625,7 +628,11 @@ class TemporalImplicitRegistrator:
         
         # time_coordinates_start = self.encoded_time_steps[time_indices_start, :]
         # time_coordinates_end = self.encoded_time_steps[time_indices_end, :]
-        
+        if len(time_coordinates_start.shape) == 1:
+            time_coordinates_start = time_coordinates_start.unsqueeze(0).repeat(points.shape[0], 1).cuda()
+        if len(time_coordinates_end.shape) == 1:
+            time_coordinates_end = time_coordinates_end.unsqueeze(0).repeat(points.shape[0], 1).cuda()
+
         input_forward = torch.cat([coordinate_tensor, time_coordinates_start, time_coordinates_end], dim=-1)
         output_forward = self.network(input_forward)
         coordinates_forward = torch.add(output_forward, coordinate_tensor)
@@ -654,7 +661,7 @@ class TemporalImplicitRegistrator:
         uncertainty = torch.norm(transformed_offset, dim=-1)
         return mid_points, uncertainty.cpu().detach().numpy()
         
-    def transform_points_jacobian(self, points, time_indices_start, time_indices_end):
+    def transform_points_jacobian(self, points, time_indices_start, time_indices_end, is_encoded=False):
         """
         Transform the given points and calculate the jacobian of the transformation.
         
@@ -669,9 +676,12 @@ class TemporalImplicitRegistrator:
         """
         coordinate_tensor = torch.tensor(points, device="cuda").float()
         coordinate_tensor = coordinate_tensor.requires_grad_(True)
-        
-        time_coordinates_start = self.encoded_time_steps[time_indices_start, :]
-        time_coordinates_end = self.encoded_time_steps[time_indices_end, :]
+        if is_encoded:
+            time_coordinates_start = time_indices_start
+            time_coordinates_end = time_indices_end
+        else:
+            time_coordinates_start = self.encoded_time_steps[time_indices_start, :]
+            time_coordinates_end = self.encoded_time_steps[time_indices_end, :]
         
         input_coordinates = torch.cat([coordinate_tensor, time_coordinates_start, time_coordinates_end], dim=-1)
         
